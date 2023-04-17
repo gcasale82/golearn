@@ -9,16 +9,42 @@ import (
 )
 
 func main() {
-	fmt.Print("Enter password: ")
-	password, err := terminal.ReadPassword(int(os.Stdin.Fd()))
+    mypass , err := createPassword()
+	if err != nil {fmt.Println("Error creating the password")}
+
+	fmt.Println("\nPassword entered:", string(mypass))
+}
+
+func createPassword() (string,error){
+valid:= false
+var password []byte
+var err error
+for valid == false {
+fmt.Print("Enter password: ")
+password, err = terminal.ReadPassword(int(os.Stdin.Fd()))
 	if err != nil {
 		fmt.Println("Failed to read password:", err)
-		return
+		return "" , err
 	}
-	if test := validatePassword(string(password)); !test {
-		fmt.Println("Password must contain 1 digit , 1 uppercase/lowecase letter and 1 special character")
+if test := validatePassword(string(password)); !test {
+		fmt.Println("Password must contain 1 digit , 1 uppercase/lowecase letter and 1 special character and must be longer than 8!")
+		continue
 	}
-	fmt.Println("\nPassword entered:", string(password))
+fmt.Print("Enter the password again : ")
+var password2 []byte
+password2, err = terminal.ReadPassword(int(os.Stdin.Fd()))
+	if err != nil {
+		fmt.Println("Failed to read password:", err)
+		return "" , err
+	}
+if string(password2) != string(password) {
+	fmt.Print("Inserted password are different !")
+	continue
+} 
+valid = true
+
+}
+return string(password) , err
 }
 
 func validatePassword(password string) bool {
