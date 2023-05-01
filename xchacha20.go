@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"crypto/rand"
 	"io"
 	"log"
@@ -15,30 +16,29 @@ const (
 	parallelism = 4
 	keyLen      = chacha20poly1305.KeySize
 	saltLen     = 32
+	nonceLen = 24
 )
 
 // GenerateKey generates an XChaCha20 key from a password using Argon2 key derivation
-func GenerateKey(password string) ([]byte, error) {
+func GenerateKey(password string) ([]byte,[]byte, error) {
 	// Generate a random salt
 	salt := make([]byte, saltLen)
 	if _, err := rand.Read(salt); err != nil {
-		return nil, err
+		return nil,nil, err
 	}
 
 	// Generate the key using Argon2 key derivation
 	key := argon2.IDKey([]byte(password), salt, iterations, memory, parallelism, keyLen)
 
-	return key, nil
+	return key,salt, nil
 }
 
 func main() {
-	// Open the file to encrypt
-	//filein, err := os.Open("plaintext.txt")
-	filedata,err := os.ReadFile("plaintext.txt")
-	if err != nil {
-		log.Fatal(err)
-	}
-	//defer filein.Close()
+filedata, err := os.Open("plaintext.txt")
+if err != nil {
+	log.Fatal(err)
+}
+defer filedata.Close()
 
 	// Create the output file
 	outfile, err := os.Create("ciphertext.encrypted")
@@ -48,20 +48,17 @@ func main() {
 	defer outfile.Close()
 
 	// Generate a random 24-byte nonce
-	nonce := make([]byte, 24)
-	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
+	nonce := make([]byte, nonceLen)
+	if _, err := rand.Read(nonce); err != nil {
 		log.Fatal(err)
 	}
 password := "mysecretpassword"
-	key, err := GenerateKey(password)
+	key,salt, err := GenerateKey(password)
 	if err != nil {
 		panic(err)
 	}
-	// Create the XChaCha20-Poly1305 cipher
-	//key := make([]byte, chacha20poly1305.KeySize)
-	if _, err := io.ReadFull(rand.Reader, key); err != nil {
-		log.Fatal(err)
-	}
+fmt.Println(nonce , "-" , salt)
+fmt.Println("key" , key)
 	aead, err := chacha20poly1305.NewX(key)
 	if err != nil {
 		log.Fatal(err)
@@ -72,9 +69,27 @@ password := "mysecretpassword"
 	if err != nil {
 		log.Fatal(err)
 	}
-	stream := aead.Seal(nil, nonce, filedata, nil)
+	_, err = outfile.Write([]byte("-"))
+if err != nil {
+    log.Fatal(err)
+}
+_, err = outfile.Write(salt)
+if err != nil {
+    log.Fatal(err)
+}
+buffer := make([]byte, 64*1024) // 64KB buffer
+for {
+	n, err := filedata.Read(buffer)
+	if err != nil && err != io.EOF {
+		log.Fatal(err)
+	}
+	if n == 0 {
+		break
+	}
+	stream := aead.Seal(nil, nonce, buffer[:n], nil)
 	_, err = outfile.Write(stream)
 	if err != nil {
 		log.Fatal(err)
 	}
+}
 }
