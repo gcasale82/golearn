@@ -7,8 +7,23 @@ import (
 	"errors"
 	"regexp"
 	"golang.org/x/crypto/ssh/terminal"
+	"crypto/rand"
+	"io"
+	"log"
+    "golang.org/x/crypto/argon2"
+	"golang.org/x/crypto/chacha20poly1305"
+	"path/filepath"
+	"time"
 )
 
+const (
+	memory      = 256 * 1024 // 64MB
+	iterations  = 10
+	parallelism = 4
+	keyLen      = chacha20poly1305.KeySize
+	saltLen     = 32
+	nonceLen = 24
+)
 func search(fileString string) ([]string  ,error) {
 output ,err := exec.Command("find", fileString, "-type", "f").Output()
 if err != nil {
@@ -20,11 +35,181 @@ return files , nil
 
 }
 
+func GenerateKey(password string) ([]byte,[]byte, error) {
+	// Generate a random salt
+	salt := make([]byte, saltLen)
+	if _, err := rand.Read(salt); err != nil {
+		return nil,nil, err
+	}
+	// Generate the key using Argon2 key derivation
+	key := argon2.IDKey([]byte(password), salt, iterations, memory, parallelism, keyLen)
+	return key,salt, nil
+}
+
+func EncryptFile(password string , filename string) {
+	filedata, err := os.Open(filename)
+if err != nil {
+	log.Fatal(err)
+}
+defer filedata.Close()
+isFullPath := filepath.IsAbs(filename)
+if isFullPath {
+	filename = filepath.Base(filename)
+}
+    suffix := ".encrypted"
+    now := time.Now()
+    formattedDate := now.Format("02-01-2006-15-04-05") // DD-MM-YYYY-HH-MM-SS
+    encFileName := filename + "-" + formattedDate + suffix
+	// Create the output file
+	outfile, err := os.Create(encFileName)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer outfile.Close()
+
+	// Generate a random 24-byte nonce
+	nonce := make([]byte, nonceLen)
+	if _, err := rand.Read(nonce); err != nil {
+		log.Fatal(err)
+	}
+    key,salt, err := GenerateKey(password)
+	if err != nil {
+		panic(err)
+	}
+	aead, err := chacha20poly1305.NewX(key)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	// Encrypt the file
+	_, err = outfile.Write(nonce)
+	if err != nil {
+		log.Fatal(err)
+	}
+	_, err = outfile.Write([]byte("-"))
+if err != nil {
+    log.Fatal(err)
+}
+_, err = outfile.Write(salt)
+if err != nil {
+    log.Fatal(err)
+}
+buffer := make([]byte, 64*1024) // 64KB buffer
+for {
+	n, err := filedata.Read(buffer)
+	if err != nil && err != io.EOF {
+		log.Fatal(err)
+	}
+	if n == 0 {
+		break
+	}
+	stream := aead.Seal(nil, nonce, buffer[:n], nil)
+	_, err = outfile.Write(stream)
+	if err != nil {
+		log.Fatal(err)
+	}
+}
+}
+func ReadNonceAndSaltFromFile(filename string) ([]byte, []byte, error) {
+    file, err := os.Open(filename)
+    if err != nil {
+        return nil, nil, err
+    }
+    defer file.Close()
+
+    // Read the nonce and salt
+    nonceAndSalt := make([]byte, 24+saltLen+1)
+    if _, err := io.ReadFull(file, nonceAndSalt); err != nil {
+        return nil, nil, err
+    }
+
+    // Extract the nonce and salt
+    nonce := nonceAndSalt[:24]
+    salt := nonceAndSalt[25:]
+	sep := nonceAndSalt[24]
+    if sep != 45 {
+        return nil, nil, fmt.Errorf("separator byte not found it is %v" , sep)
+    }
+
+    return nonce, salt, nil
+}
+func DecryptFile(password string , inputFile string) error {
+    // Open the encrypted file for reading
+    inFile, err := os.Open(inputFile)
+    if err != nil {
+        return err
+    }
+    defer inFile.Close()
+var nonce []byte
+var salt []byte
+nonce , salt , err = ReadNonceAndSaltFromFile(inputFile)
+if err != nil {
+    log.Fatal(err)
+}
+key := argon2.IDKey([]byte(password), salt, iterations, memory, parallelism, keyLen)
+aead, err := chacha20poly1305.NewX(key)
+    if err != nil {
+        log.Fatal(err)
+    }
+
+    // Create a buffer to hold the decrypted data
+    buffer := make([]byte, 0)
+
+    // Decrypt the file in 64KB chunks
+	if _, err := inFile.Seek(57, 0); err != nil {
+    return err
+}
+    for {
+        chunk := make([]byte, 64*1024)
+        n, err := inFile.Read(chunk)
+        if err != nil && err != io.EOF {
+            log.Fatal(err)
+        }
+        if n == 0 {
+            break
+        }
+        plaintext, err := aead.Open(nil, nonce, chunk[:n], nil)
+        if err != nil {
+            log.Fatal(err)
+        }
+        buffer = append(buffer, plaintext...)
+    }
+	isFullPath := filepath.IsAbs(inputFile)
+if isFullPath {
+	inputFile = filepath.Base(inputFile)
+}
+    suffix := ".encrypted"
+    regEnd := strings.HasSuffix(inputFile, suffix)
+	var outputFile string
+    if regEnd {
+		outputFile = strings.TrimSuffix(inputFile, suffix)
+	} else {
+		now := time.Now()
+        formattedDate := now.Format("02-01-2006-15-04-05") // DD-MM-YYYY-HH-MM-SS
+		if len(inputFile) > 8 {
+            outputFile = inputFile[:8] + "-" + formattedDate
+		} else {
+			outputFile = inputFile + "-" + formattedDate
+		}
+	}
+ // Write the decrypted data to a new file
+    outfile, err := os.Create(outputFile)
+    if err != nil {
+        log.Fatal(err)
+    }
+    defer outfile.Close()
+
+    _, err = outfile.Write(buffer)
+    if err != nil {
+        log.Fatal(err)
+    }
+return err
+}
+
 func main(){
 var action string
 var allFiles []string
 var password string
-//password := "Password123!!!"
 if len(os.Args) < 3 {
 		fmt.Println("Usage is fcryptx option file \n option : \n -e encrypt \n -d decrypt")
 		return
@@ -51,6 +236,7 @@ allFiles = append(allFiles,files...)
 
 } 
 fmt.Println("allFiles" , allFiles)
+fmt.Println("len all files" ,len(allFiles))
 switch action {
 case "encrypt" :
 	var err error
@@ -67,13 +253,15 @@ case "decrypt" :
 
 func encrypt(files []string , password string){
 	for _ , file := range files{
-	fmt.Printf("Encrypting file %s with password %s \n" , file , password)
+	fmt.Printf("Encrypting file %s \n" , file)
+	EncryptFile(password , file)
 	}
 }
 
 func decrypt(files []string , password string){
 	for _ , file := range files{
-	fmt.Printf("Decrypting file %s with password %s \n" , file , password)
+	fmt.Printf("Decrypting file %s \n" , file)
+	DecryptFile(password,file)
 	}
 }
 
