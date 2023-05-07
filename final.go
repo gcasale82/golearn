@@ -24,6 +24,17 @@ const (
 	saltLen     = 32
 	nonceLen = 24
 )
+
+func removeEmptyString(s []string) []string {
+	r := ""
+    for i, v := range s {
+        if v == r {
+            return append(s[:i], s[i+1:]...)
+        }
+    }
+    return s
+}
+
 func search(fileString string) ([]string  ,error) {
 output ,err := exec.Command("find", fileString, "-type", "f").Output()
 if err != nil {
@@ -31,6 +42,7 @@ if err != nil {
 		return emptySlice, errors.New("file not found !")
 	}
 files := strings.Split(string(output), "\n")
+files = removeEmptyString(files)
 return files , nil
 
 }
@@ -235,8 +247,15 @@ allFiles = append(allFiles,files...)
 //allFiles = removeDuplicateAndEmptyStr(allFiles)
 
 } 
-fmt.Println("allFiles" , allFiles)
-fmt.Println("len all files" ,len(allFiles))
+//fmt.Println("allFiles" , allFiles)
+//fmt.Println("len all files" ,len(allFiles))
+
+if len(allFiles) < 1 {
+fmt.Println("File not found for requested operation !")
+return
+
+}
+
 switch action {
 case "encrypt" :
 	var err error
